@@ -3,24 +3,24 @@
 EIDIR=/ensembl/easy-import
 CONFDIR=/import/conf
 DATADIR=/import/data
+SETUPDB=0
 EXPORTCORE=0
 ORTHORUN=0
-PREPAREGENETREES=0
-RUNGENETREES=0
+MAKEFILES=0
 IMPORTORTHO=0
 
 DEFAULTINI="$CONFDIR/default.ini"
 OVERINI="$CONFDIR/overwrite.ini"
 
-while getopts "eoprid:" OPTION
+while getopts "seomid:" OPTION
 do
   case $OPTION in
+    s)  SETUPDB=1;;          # setup_database.pl
     e)  EXPORTCORE=1;;       # export_core_sequences.pl
     o)  ORTHORUN=1;;         # run ORTHOFINDER
-    p)  PREPAREGENETREES=1;; # prepare_genetrees.pl
-    r)  RUNGENETREES=1;;     # run_genetrees.pl
-    i)  IMPORTORTHO=1;;      # import_orthogroup_files.pl
-    d)  DATABASE=$OPTARG;;   # core database name
+    m)  MAKEFILES=1;;        # make_orthogroup_files.pl
+    i)  IMPORTORTHO=1;;      # import_orthogroups.pl
+    d)  DATABASE=$OPTARG;;   # compara database name
   esac
 done
 
@@ -50,10 +50,6 @@ if ! [ -s $OVERINI ]; then
   OVERINI=
 fi
 
-if ! [ -z $INI ]; then
-  OVERINI="$CONFDIR/$INI $OVERINI"
-fi
-
 # check main ini file exists
 if ! [ -s $CONFDIR/$DATABASE.ini ]; then
   echo "ERROR: no compara DATABASE $DATABASE.ini exists in conf dir"
@@ -62,22 +58,37 @@ fi
 
 DBINI=$CONFDIR/$DATABASE.ini
 
-#DISPLAY_NAME=$(awk -F "=" '/SPECIES.DISPLAY_NAME/ {print $2}' $DBINI | perl -pe 's/^\s*// and s/\s*$// and s/\s/_/g')
-#ASSEMBLY=${DISPLAY_NAME}_$(awk -F "=" '/ASSEMBLY.DEFAULT/ {print $2}' $DBINI | perl -pe 's/^\s*// and s/\s*$// and s/\s/_/g')
+if ! [ $SETUPDB -eq 0 ]; then
+  echo "setting up compara database"
+  perl $EIDIR/compara/setup_database.pl $DEFAULTINI $DBINI $OVERINI &> >(tee log/setup_database.err)
+fi
 
 if ! [ $EXPORTCORE -eq 0 ]; then
   echo "exporting core sequences for compara"
   perl $EIDIR/compara/export_core_sequences.pl $DEFAULTINI $DBINI $OVERINI &> >(tee log/export_core_sequences.err)
 fi
 
-if ! [ $PREPAREGENETREES -eq 0 ]; then
-  echo "preparing files for genetrees"
-  perl $EIDIR/compara/prepare_files_for_genetrees.pl $DEFAULTINI $DBINI $OVERINI &> >(tee log/prepare_files_for_genetrees.err)
+if ! [ $ORTHORUN -eq 0 ]; then
+  echo "running Orthofinder"
+  if [ -z $THREADS ]; then
+    THREADS=4
+  fi
+  ORTHOFINDER_DIR=$(awk -F "=" '/ORTHOFINDER_DIR/ {print $2}' $DBINI | tr -d ' ')
+  FASTA_DIR=$(awk -F "=" '/FASTA_DIR/ {print $2}' $DBINI | tr -d ' ')/canonical_proteins
+  VERSION=${ORTHOFINDER_DIR##*_}
+  ORTHOFINDER_DIR=$(dirname $ORTHOFINDER_DIR)
+  mkdir -p /import/data/tmp
+  orthofinder -f $FASTA_DIR -M msa -S diamond -A mafft_and_trim -T raxml-ng -o $ORTHOFINDER_DIR -n $VERSION -t $THREADS -X
 fi
 
-if ! [ $RUNGENETREES -eq 0 ]; then
-  echo "running genetrees"
-  perl $EIDIR/compara/run_genetrees.pl $DEFAULTINI $DBINI $OVERINI &> >(tee log/run_genetrees.err)
+if ! [ $MAKEFILES -eq 0 ]; then
+  echo "preparing orthogroup files for import"
+  perl $EIDIR/compara/make_orthogroup_files.pl $DEFAULTINI $DBINI $OVERINI &> >(tee log/make_orthogroup_files.err)
+fi
+
+if ! [ $IMPORTORTHO -eq 0 ]; then
+  echo "importing orthogroups"
+  perl $EIDIR/compara/import_orthogroups.pl $DEFAULTINI $DBINI $OVERINI &> >(tee log/import_orthogroups.err)
 fi
 
 cd ../
